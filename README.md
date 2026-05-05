@@ -79,40 +79,39 @@
 
 //START OF CODE:
 
-//Romy- Sensors and Input Code:
-/* 
-JC needs:
-	   x position of the robot
-       y position of the robot
-       the robots angle of travel, defined from every change of direction
-       ultrasonic distances of LHS and RHS
-       and if ultrasonic senors is detecting something (ultrasonic valid or non valid)
-*/
+// Who Did what Component
+/*
+Romy - Sensors and Input Code
   
-//Caleb- Movement and Hardware Control Code:
+Caleb - Movement and Hardware Control Code
 
-//JC- Navigation and Obstacle Detection Code:
+Jack - Navigation and Obstacle Detection Code
 
+*/
 // Group setup component
-// set up Millis components
+
+
+// set up Millis components for loop timing
 unsigned long startStartTime = 0;
-
 unsigned long flashStartTime = 0;
-
 unsigned long obstacleClearTime = 0;
-const unsigned long CLEAR_CONFIRM_MS = 200; // obstacle must be clear for this long
+
+// The const long below sets the time that an obstacle can be seen before repeating
+const unsigned long CLEAR_CONFIRM_MS = 200; 
+
+// Sets up a true or false statement to define right and left 
 int lockedTurnDirection = 1; // 1 = right, -1 = left
 
-// turning timing variables
+// Turning timing variables
 const unsigned long TURN_TIME_MS = 400;
-
 const unsigned long STOP_PAUSE_MS = 100;
 
 // Flash rate for LED's
 const unsigned long FLASH_INTERVAL_MS = 250;
 
-//JC setup
-// define the individual states of the robot with a number 0-6 to determine which case the robot it changing to.
+
+//Navigation and Obstacle Detection setup constants ect.
+// enum defines values for the individual states of the robot with a number 0-9 to determine which case the robot is in.
 enum ROBOTSTATE {
  STATE_START,
  STATE_REORIENT,
@@ -125,30 +124,32 @@ enum ROBOTSTATE {
  STATE_COMPLETED,
 };
 
+// Sets up variables for changing states in the state machine switch by defining a variable  for the ROBOTSTATE to set a state and thus it's number representation.
 ROBOTSTATE CURRENT_STATE = STATE_START;
-
-ROBOTSTATE newState = STATE_START;
+ROBOTSTATE NEW_STATE = STATE_START;
 
 // Distance parameters
-
 const float pi = 3.14;
-const float object_threshold = 20.0; // cm this is the acceptable distance from the obstacle that the robot can be, this means after this point the robot will stop.
-const float target_x = 200.0; //cm position of the robot in x
-const float target_y = 0.0; //cm position of the robot in y
+// cm this is the acceptable Distance from the obstacle that the robot can be, this means after this point the robot will stop.
+const float object_threshold = 20.0; 
+//cm position of the robot in x
+const float target_x = 200.0; 
+//cm position of the robot in y
+const float target_y = 0.0; 
+//This is the target tolerance from an object before the robot stops moving and switches states 
 const float target_tolerance = 20.0; // cm
 
 // Timing parameters
-long stateStartTime = 0;
+long State_Start_Time = 0;
 
-//Setup CR
 
+//Setup Movement and Hardware Control Code
 //Restrict wheel speeds (0 to 255)
 #define DRIVE_SPEED 160
 #define TURN_SPEED 120
 #define REVERSE_SPEED 160
 
-
-//Define the pin modes (output or input) for each component 
+//Define the pin modes (output or input) for each Pin used on the Robot
 void setup(){
   pinMode(DRIVE_RIGHT_PIN_1, OUTPUT);
   pinMode(DRIVE_RIGHT_PIN_2, OUTPUT);
@@ -166,548 +167,516 @@ void setup(){
   pinMode(RIGHT_TRIG_PIN, OUTPUT);
   pinMode(RIGHT_ECHO_PIN, INPUT);
 
-  attachInterrupt(digitalPinToInterrupt(LEFT_ENCODER_PIN), LeftEncoderISR, RISING);
-  attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_PIN), RightEncoderISR, RISING);
+// Sets the left and right encoders as increasing values (rising)
+  attachInterrupt(digitalPinToInterrupt(LEFT_ENCODER_PIN), Left_Encoder_ISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_PIN), Right_Encoder_ISR, RISING);
 
-  StopDriving();
-  DisableBothLEDs();
+// Ensures that the robot is set to stop with no LED output once the robot starts by calling the below functions
+  Stop_Motors();
+  Disable_Both_LEDs();
 }
 
-//Setup RD
+
+//Setup Sensors and Input Code
+// Wheel Distance values from the wheel encoders
+const float Wheel_Circumference = pi * 13;
+const float Turn_Radius = 13.0 / 2.0;
 
 const float CM_PER_PULSE = (pi * 6.7) / 20;
+const float DEGREES_PER_PULSE = (CM_PER_PULSE / Wheel_Circumference) * 360;
 
-const float turn_radius = 13.0 / 2.0;
-
-const float circumference = pi * 13;
-
-const float DEGREES_PER_PULSE = (CM_PER_PULSE / circumference) * 360;
-
-float left_distance = 0; 
-
-float right_distance = 0; 
+// Position Values
+float Left_Distance = 0; 
+float Right_Distance = 0; 
 
 float x_position = 0; 
-
 float y_position = 0; 
+float Heading_Deg = 0; 
+float Avoid_Target_Heading = 0;
 
-float headingDeg = 0; 
+// Obstacle logic definitions
+bool Obstacle_Left = false; 
+bool Obstacle_Right = false; 
 
-bool obstacle_left = false; 
+// Encoder value Definitions
+// Current encoder count
+volatile long Left_Encoder_Count = 0; 
+volatile long Right_Encoder_Count = 0; 
 
-bool obstacle_right = false; 
+// Previous_ encoder count
+long Previous_Left_Encoder_Count = 0; 
+long Previous_Right_Encoder_Count = 0; 
 
-volatile long leftEncoderCount = 0; 
-
-volatile long rightEncoderCount = 0; 
-
-long previousLeftEncoderCount = 0; 
-
-long previousRightEncoderCount = 0; 
-
+// sets a time for the robot to ignore obstacle detection later in the code
 const unsigned long REORIENT_OBSTACLE_SUPPRESS_MS = 600;
 
-float avoidTargetHeading = 0;
 
-//JC: functions for changing/representing robot states
-
+//Functions for changing/representing robot states
 //uses the wheel encoder knowledge to find the displacement of the robot from the end point(0,200)
-float distance_to_target () 
+float Distance_To_Target () 
 {
   float dx = target_x - x_position; // compare the point in space the robot is in refernece to the target in the x-axis
   float dy = target_y - y_position; // compare the point in space the robot is in refernece to the target in the y-axis
-  return sqrt(dx * dx + dy * dy); // use pythagoras theorem to determine the distance in a straight line to the target
+  return sqrt(dx * dx + dy * dy); // use pythagoras theorem to determine the Distance in a straight line to the target
 }
 
 // true or false statement switch about the position of the robot in space compared to end point.
-bool target_reached() {
-  return distance_to_target() < target_tolerance;
-}
-
-// detects if the sensor data about the left and right of the robot is less then the target tolerance (distance allowed from an object) 
-bool obstacle_detected()
+bool Target_Reached () 
 {
-  return (left_distance > 0 && left_distance < object_threshold) ||
-         (right_distance > 0 && right_distance < object_threshold);
+  return Distance_To_Target() < target_tolerance;
 }
 
-// chooses based upon the distance from the sensor to dictate how the robot should act
-int direction_of_turning()
+// detects if the sensor data about the left and right of the robot is less then the target tolerance (Distance allowed from an object) 
+bool Obstacle_Detected ()
+{
+  return (Left_Distance > 0 && Left_Distance < object_threshold) || 
+  (Right_Distance > 0 && Right_Distance < object_threshold);
+}
+
+// chooses based upon the Distance from the sensor to dictate how the robot should act
+int Direction_of_Turning ()
 {
   // obstacle only on right side, turn left
-  if (obstacle_right && !obstacle_left) return -1;
+  if (Obstacle_Right && !Obstacle_Left) return -1;
   
   // obstacle only on left side, turn right
-  if (obstacle_left && !obstacle_right) return 1;
+  if (Obstacle_Left && !Obstacle_Right) return 1;
   
   // both sensors or neither — default turn right
   return 1;
 }
 
 // State change aiding the final loop
-void Changestate(ROBOTSTATE newState) {
-  CURRENT_STATE = newState;
-  stateStartTime = millis ();
+void Changestate(ROBOTSTATE NEW_STATE) 
+{
+  CURRENT_STATE = NEW_STATE;
+  State_Start_Time = millis ();
 }
 
-// CR Functions
-//Set the left and right drive pins to high/low 
-// to make the car drive forward
-void DriveForwards(){
+
+// Movement and Hardware Control Functions
+//Set the left and right drive pins to high/low to make the car drive forward and set the the high pins to the drive speed in an analogue write.
+void Drive_Forwards ()
+{
   digitalWrite(DRIVE_RIGHT_PIN_1, LOW);
   analogWrite(DRIVE_RIGHT_PIN_2, DRIVE_SPEED);
   digitalWrite(DRIVE_LEFT_PIN_1, LOW);
   analogWrite(DRIVE_LEFT_PIN_2, DRIVE_SPEED);
 }
 
-//Set the left and right drive pins to high/low
-// to make the car drive backwards
-void DriveBackwards(){
-  analogWrite(DRIVE_RIGHT_PIN_1, REVERSE_SPEED);
-  digitalWrite(DRIVE_RIGHT_PIN_2, LOW);
-  analogWrite(DRIVE_LEFT_PIN_1, REVERSE_SPEED);
-  digitalWrite(DRIVE_LEFT_PIN_2, LOW);
-}
-
-//Set all drive pins to low to stop the car
-void StopDriving(){
+//Set all drive pins to 0 as some pins are set to an analogue value, ensuring the motors stop reliably 
+void Stop_Motors ()
+{
   analogWrite(DRIVE_RIGHT_PIN_1, 0);
   analogWrite(DRIVE_RIGHT_PIN_2, 0);
   analogWrite(DRIVE_LEFT_PIN_1, 0);
   analogWrite(DRIVE_LEFT_PIN_2, 0);
 }
 
-//Set the right drive pins to rotate forwards
-//Set the left drive pins to rotate in reverse
-void TurnLeft(){
+//Set the right drive pins to rotate forwards and set the left drive pins to rotate in reverse
+void Turn_Left ()
+{
   analogWrite(DRIVE_RIGHT_PIN_1, TURN_SPEED);
   digitalWrite(DRIVE_RIGHT_PIN_2, LOW);
   digitalWrite(DRIVE_LEFT_PIN_1, LOW);
   analogWrite(DRIVE_LEFT_PIN_2, TURN_SPEED);
 }
 
-//Set the right drive pins to rotate in reverse
-//Set the left dive pins to rotate forwards
-void TurnRight(){
+//Set the right drive pins to rotate in reverse and set the left dive pins to rotate forwards
+void Turn_Right ()
+{
   digitalWrite(DRIVE_RIGHT_PIN_1, LOW);
   analogWrite(DRIVE_RIGHT_PIN_2, TURN_SPEED);
   analogWrite(DRIVE_LEFT_PIN_1, TURN_SPEED);
   digitalWrite(DRIVE_LEFT_PIN_2, LOW);
 }
 
-void EnableLeftLED(){
+// Turns on only the Left LED to recieve a colour value
+void Enable_Left_LED ()
+{
   digitalWrite(LED_LEFT_EN_PIN, LED_LEFT_ENABLED);
 }
 
-void DisableLeftLED(){
+// Turns off only the Left LED
+void Disable_Left_LED ()
+{
   digitalWrite(LED_LEFT_EN_PIN, LED_LEFT_DISABLED);
 }
 
-void EnableRightLED(){
+// Turns on only the right LED to receive a colour
+void Enable_Right_LED ()
+{
   digitalWrite(LED_RIGHT_EN_PIN, LED_RIGHT_ENABLED);
 }
 
-void DisableRightLED(){
+// Turns off only the right LED
+void Disable_Right_LED ()
+{
   digitalWrite(LED_RIGHT_EN_PIN, LED_RIGHT_DISABLED);
 }
 
-void EnableBothLEDs(){
-  EnableLeftLED();
-  EnableRightLED();
+// Turns on both LEDs to recieve a colour value
+void Enable_Both_LEDs ()
+{
+  Enable_Left_LED();
+  Enable_Right_LED();
 }
 
-void DisableBothLEDs(){
-  DisableLeftLED();
-  DisableRightLED();
+//  Turns off both LEDs
+void Disable_Both_LEDs ()
+{
+  Disable_Left_LED();
+  Disable_Right_LED();
 }
 
-void SetLEDColour(int red, int green, int blue){
+// Sets up a universal function such that the led colour can be defined by it later on
+void Set_LED_Colour(int red, int green, int blue)
+{
   analogWrite(RED_LED_PIN, LED_PWM_VALUE(red));
   analogWrite(GREEN_LED_PIN, LED_PWM_VALUE(green));
   analogWrite(BLUE_LED_PIN, LED_PWM_VALUE(blue));
 }
 
-void DrivingLEDs(){
-  EnableBothLEDs();
-  SetLEDColour(0, BRIGHT_PWM, 0);
-}
-
-void ShowLeftTurnLED(){
-  EnableLeftLED();
-  DisableRightLED();
-  SetLEDColour(0, 0, BRIGHT_PWM);
-}
-
-void ShowRightTurnLED(){
-  EnableRightLED();
-  DisableLeftLED();
-  SetLEDColour(0, 0, BRIGHT_PWM);
-}
-
-void RedLED(){
-  EnableBothLEDs();
-  SetLEDColour(BRIGHT_PWM, 0, 0);
-}
-
-void DriveForwards(unsigned long timeMs){
-  DriveForwards();
-  delay(timeMs);
-  StopDriving();
-}
-
-void TurnLeftFor(unsigned long timeMs){
-  TurnLeft();
-  delay(timeMs);
-  StopDriving();
-}
-
-void TurnRightFor(unsigned long timeMs){
-  TurnRight();
-  delay(timeMs);
-  StopDriving();
-}
-
-void Stop(){
-  StopDriving();
-  DisableBothLEDs();
-}
-
-void UpdateHeadingFromEncoders(int turnSign) {
-  long leftDelta  = leftEncoderCount  - previousLeftEncoderCount;
-  long rightDelta = rightEncoderCount - previousRightEncoderCount;
-  previousLeftEncoderCount  = leftEncoderCount;
-  previousRightEncoderCount = rightEncoderCount;
-  float avgDelta = (leftDelta + rightDelta) / 2.0;
-  headingDeg += turnSign * avgDelta * DEGREES_PER_PULSE;
-  while (headingDeg < -180) headingDeg += 360;
-  while (headingDeg >  180) headingDeg -= 360;
-}
-
-// RD Functions
-// Reads one ultrasonic sensor and returns distance in cm 
-
-float ReadUltrasonicDistance(int trigPin, int echoPin)
+// Sets both LEDs on and to a green LED
+void Driving_LEDs ()
 {
-  digitalWrite(trigPin, LOW);
+  Enable_Both_LEDs();
+  Set_LED_Colour(0, BRIGHT_PWM, 0);
+}
+
+// Turn on the left and ensure the right is disabled and set the colour to blue
+void Left_Turn_LED ()
+{
+  Enable_Left_LED();
+  Disable_Right_LED();
+  Set_LED_Colour(0, 0, BRIGHT_PWM);
+}
+
+// Turn on the right and ensure the left is disabled and set the colour to blue
+void Right_Turn_LED ()
+{
+  Enable_Right_LED();
+  Disable_Left_LED();
+  Set_LED_Colour(0, 0, BRIGHT_PWM);
+}
+
+// Sets both LEDs to red
+void Set_Red_LED ()
+{
+  Enable_Both_LEDs ();
+  Set_LED_Colour(BRIGHT_PWM, 0, 0);
+}
+
+// Calls the earlier drive forward function and set a time variable dependent version
+void Drive_Forwards (unsigned long timeMs)
+{
+  Drive_Forwards();
+  delay(timeMs);
+  Stop_Motors();
+}
+
+// Calls the earlier Turn left function and set a time variable dependent version
+void Turn_LeftFor(unsigned long timeMs)
+{
+  Turn_Left();
+  delay(timeMs);
+  Stop_Motors();
+}
+
+// Calls the earlier Turn right function and set a time variable dependent version
+void Turn_Right_For (unsigned long timeMs)
+{
+  Turn_Right();
+  delay(timeMs);
+  Stop_Motors();
+}
+
+// Sets a universal stop function for stopping the motors and disabling the LEDs
+void Stop()
+{
+  Stop_Motors();
+  Disable_Both_LEDs();
+}
+
+// Uses encoder values to determine the point the robot is in space relative to the target 2m from the start point
+void Update_Heading (int Turn_Sign) 
+{
+  long Left_Delta  = Left_Encoder_Count  - Previous_Left_Encoder_Count; // change in left Distance from the heading
+  long Right_Delta = Right_Encoder_Count - Previous_Right_Encoder_Count; // change in right Distance from the heading
+  
+  Previous_Left_Encoder_Count  = Left_Encoder_Count;
+  Previous_Right_Encoder_Count = Right_Encoder_Count;
+  
+  float AVERAGE_Delta = (Left_Delta + Right_Delta) / 2.0;
+  Heading_Deg += Turn_Sign * AVERAGE_Delta * DEGREES_PER_PULSE;
+  
+  while (Heading_Deg < -180) Heading_Deg += 360;
+  while (Heading_Deg >  180) Heading_Deg -= 360;
+}
+
+
+// Sensors and Input Functions
+/* Sets up a function which signals the ultrasonic sensor to send a pulse and recieve any returning waves. using this, the function returns Distance in cm and filters out invalid Distances, those being duration 0 or less than 0 Distance or over 400cm Distance values.
+*/
+float Read_Ultrasonic_Distance(int Trig_Pin, int Echo_Pin)
+{
+  digitalWrite(Trig_Pin, LOW);
   delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
+  digitalWrite(Trig_Pin, HIGH);
   delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
+  digitalWrite(Trig_Pin, LOW);
 
-  unsigned long duration = pulseIn(echoPin, HIGH, 30000); // timeout after 30ms
+  unsigned long Duration = pulseIn(Echo_Pin, HIGH, 30000); // timeout after 30ms
 
-  if (duration == 0)
+  if (Duration == 0)
   {
     return -1;  // Invalid reading, return error value
   }
 
-  float distance = duration / 58.0;  // Convert pulse duration to cm
+  float Distance = Duration / 58.0;  // Convert pulse Duration to cm
 
-  // Check if the distance is within a reasonable range (0 - 400 cm)
-  if (distance <= 0 || distance > 400)
+  // Check if the Distance is within a reasonable range (0 - 400 cm)
+  if (Distance <= 0 || Distance > 400)
   {
-    return -1;  // Invalid distance, return error
+    return -1;  // Invalid Distance, return error
   }
 
-  return distance;  // Return valid distance in cm
+  return Distance;  // Return valid Distance in cm
 }
 
- 
-
-// Updates left and right distance values 
-
-void UpdateDistanceReadings() 
-
+// Updates left and right Distance values 
+void Update_Distance_Readings () 
 { 
-
- left_distance = ReadUltrasonicDistance(LEFT_TRIG_PIN, LEFT_ECHO_PIN); 
-
- right_distance = ReadUltrasonicDistance(RIGHT_TRIG_PIN, RIGHT_ECHO_PIN); 
-
+ Left_Distance = Read_Ultrasonic_Distance(LEFT_TRIG_PIN, LEFT_ECHO_PIN); 
+ Right_Distance = Read_Ultrasonic_Distance(RIGHT_TRIG_PIN, RIGHT_ECHO_PIN); 
 } 
 
- 
-
-// Updates obstacle booleans 
-
+// Updates obstacle logic
 void UpdateObstacleFlags() 
-
 { 
-
- if(left_distance > 0 && left_distance < object_threshold) 
-
+ if(Left_Distance > 0 && Left_Distance < object_threshold) 
  { 
-
- obstacle_left = true; 
-
+ 	Obstacle_Left = true; 
  } 
-
- else 
-
+ 	else 
  { 
-
- obstacle_left = false; 
-
+ 	Obstacle_Left = false;
  } 
-
- 
-
- if(right_distance > 0 && right_distance < object_threshold) 
-
- { 
-
- obstacle_right = true; 
-
+ 	if(Right_Distance > 0 && Right_Distance < object_threshold) 
+ {
+		Obstacle_Right = true
+ }
+	else
+ { 			
+	Obstacle_Right = false;
  } 
-
- else 
-
- { 
-
- obstacle_right = false; 
-
- } 
-
 } 
 
- 
-
-// Counts left encoder pulses 
-
-void LeftEncoderISR() 
-
+// Left Encoder value increases for every encoder pass
+void Left_Encoder_ISR() 
 { 
-
- leftEncoderCount++; 
-
+ Left_Encoder_Count++; 
 } 
 
- 
-
-// Counts right encoder pulses 
-
-void RightEncoderISR() 
-
+// Right Encoder value increases for every encoder pass
+void Right_Encoder_ISR() 
 { 
-
- rightEncoderCount++; 
-
+ Right_Encoder_Count++; 
 } 
 
- 
-
-// Simple position update 
-
+// This function uses the left encoder and right encoder counts both past and present to determine the robots position relative to the target by utilising previous functions and defined values.
 void UpdatePosition() 
-
 { 
+ long Left_Change = Left_Encoder_Count - Previous_Left_Encoder_Count; 
+ long Right_Change = Right_Encoder_Count - Previous_Right_Encoder_Count; 
 
- long leftChange = leftEncoderCount - previousLeftEncoderCount; 
- long rightChange = rightEncoderCount - previousRightEncoderCount; 
+ Previous_Left_Encoder_Count = Left_Encoder_Count; 
+ Previous_Right_Encoder_Count = Right_Encoder_Count; 
 
- previousLeftEncoderCount = leftEncoderCount; 
- previousRightEncoderCount = rightEncoderCount; 
+ float AVG_Change = (Left_Change + Right_Change) / 2.0;  // use 2.0 to avoid integer division
+ float Distance_Cm = AVG_Change * CM_PER_PULSE;
 
- float avgChange = (leftChange + rightChange) / 2.0;  // use 2.0 to avoid integer division
- float distance_Cm = avgChange * CM_PER_PULSE;
+ float Heading_in_Radians = Heading_Deg * pi / 180.0;
 
- float headingRad = headingDeg * pi / 180.0;
-
- x_position += distance_Cm * cos(headingRad); 
- y_position += distance_Cm * sin(headingRad);
+ x_position += Distance_Cm * cos(Heading_in_Radians); 
+ y_position += Distance_Cm * sin(Heading_in_Radians);
 
 } 
 
+// determines the angle from the centreline for the robot
 float angle_to_target () 
-
 {
 float dx = target_x - x_position;
 float dy = target_y - y_position;
 return atan2(dy, dx) *(180 / pi);
 }
 
- 
-
-// Runs all sensor/input updates 
-
-void UpdateSensorsAndInputs() 
-
+// the following function calls all of the sensor update functions  
+void Update_Sensors_And_Inputs() 
 { 
-
- UpdateDistanceReadings(); 
-
+ Update_Distance_Readings(); 
  UpdateObstacleFlags(); 
-
 } 
 
-// Start of Main Loop
 
+
+// Start of Main Loop
 void loop () {
-  
+// if the the statement below, the robot has reached it's goal, thus exit loop() immediately and nothing else runs
 if (CURRENT_STATE == STATE_COMPLETED) {
-  StopDriving();
-  EnableBothLEDs();
-  SetLEDColour(0, 0, BRIGHT_PWM);
-  return; // exit loop() immediately, nothing below runs
+  Stop_Motors();
+  Enable_Both_LEDs();
+  Set_LED_Colour(0, 0, BRIGHT_PWM);
+  return; 
 }
 
   // update sensor values and input values
-  UpdateSensorsAndInputs ();
+  Update_Sensors_And_Inputs ();  
+  // define current time for the robot, this being the time that the robot has been turned on for
+  unsigned long Current_Time = millis ();
   
-  // define current time
-  unsigned long currentTime = millis ();
-  
-   switch (CURRENT_STATE) {
-    
-    case STATE_START:
-    	StopDriving (); 
-    	DisableBothLEDs ();
-
-headingDeg = angle_to_target();
-
-    	if (target_reached ()) {
-          
-     	 Changestate(STATE_COMPLETED);
-         
+   switch (CURRENT_STATE) 
+   {
+	case STATE_START:
+    	Stop_Motors (); 
+    	Disable_Both_LEDs ();
+		Heading_Deg = angle_to_target();
+    	if (Target_Reached ()) 
+		{  
+     	 	Changestate(STATE_COMPLETED);
     	}
-    
-    	else {
-          
-     	 Changestate (STATE_MOVE_FORWARD);
-          
+    	else 
+		{  
+     		Changestate (STATE_MOVE_FORWARD); 
     	}
    	 	break;
-    
     // This case is for driving to the target
     case STATE_MOVE_FORWARD:
-   { 	
+   	{ 	
      	UpdatePosition(); 
-      DrivingLEDs (); // turns on LEDs to green
-     
-    	if (target_reached ()) 
+      	Driving_LEDs (); // turns on both LEDs to green
+    	if (Target_Reached ()) // if the robot is at x = 0, y = 200, the robot stops
         {
-          StopDriving (); 
-          Changestate(STATE_COMPLETED);
+        	Stop_Motors (); 
+        	Changestate(STATE_COMPLETED);
         }
-
-    	else if (obstacle_detected()) 
+    	else if (Obstacle_Detected()) 
         { 
-          StopDriving (); 
-          flashStartTime = currentTime;
-          Changestate(STATE_AVOID_OBSTACLE);
+        	Stop_Motors (); 
+        	flashStartTime = Current_Time;
+        	Changestate(STATE_AVOID_OBSTACLE);
         }
       // checks to see if the robot is heading off course
-    else 
-    {
-          float targetAngle = angle_to_target ();
-          float angleDiff = targetAngle - headingDeg;
-          while (angleDiff < -180) angleDiff += 360;
-          while (angleDiff > 180)  angleDiff -= 360;
-        
-          if (abs(angleDiff) > 15) 
-        {
-          StopDriving ();
-          Changestate (STATE_REORIENT);
-        }
-
-          else 
-        {
-          DriveForwards ();
-        }
-    }
-   }
-    	break;
-    
+    	else 
+   		{
+        	float targetAngle = angle_to_target ();
+        	float Angle_Diff = targetAngle - Heading_Deg;
+        	while (Angle_Diff < -180) Angle_Diff += 360;
+        	while (Angle_Diff > 180)  Angle_Diff -= 360;
+        	if (abs(Angle_Diff) > 15) 
+        	{
+        		Stop_Motors ();
+        		Changestate (STATE_REORIENT);
+    		}
+        	else 
+    		{
+        		Drive_Forwards ();
+    		}
+		}
+	}
+    break;
     case STATE_TURN_LEFT:
-{
-  ShowLeftTurnLED();
-  float angleDiff = avoidTargetHeading - headingDeg;
-  while (angleDiff < -180) angleDiff += 360;
-  while (angleDiff >  180) angleDiff -= 360;
-
-  if (abs(angleDiff) > 5) {
-    TurnLeft();
-    UpdateHeadingFromEncoders(-1);
-  }
-  else {
-    StopDriving();
-    Changestate(STATE_BYPASS_DRIVE);
-  }
-  break;
-}
-
-case STATE_TURN_RIGHT:
-{
-  ShowRightTurnLED();
-  float angleDiff = avoidTargetHeading - headingDeg;
-  while (angleDiff < -180) angleDiff += 360;
-  while (angleDiff >  180) angleDiff -= 360;
-
-  if (abs(angleDiff) > 5) {
-    TurnRight();
-    UpdateHeadingFromEncoders(+1);
-  }
-  else {
-    StopDriving();
-    Changestate(STATE_BYPASS_DRIVE);
-  }
-  break;
-}
-
-  case STATE_REORIENT:
+	{
+		Left_Turn_LED();
+		float Angle_Diff = Avoid_Target_Heading - Heading_Deg;
+		while (Angle_Diff < -180) Angle_Diff += 360;
+		while (Angle_Diff >  180) Angle_Diff -= 360;
+		if (abs(Angle_Diff) > 5) 
+		{
+			Turn_Left();
+			Update_Heading(-1);
+		}
+  		else 
+		{
+    		Stop_Motors();
+    		Changestate(STATE_BYPASS_DRIVE);
+  		}
+  	break;
+	}
+	case STATE_TURN_RIGHT:
+	{
+	Right_Turn_LED();
+	float Angle_Diff = Avoid_Target_Heading - Heading_Deg;
+	while (Angle_Diff < -180) Angle_Diff += 360;
+	while (Angle_Diff >  180) Angle_Diff -= 360;
+	if (abs(Angle_Diff) > 5) 
+	{
+    	Turn_Right();
+    	Update_Heading(+1);
+	}
+	else 
+	{
+    	Stop_Motors();
+    	Changestate(STATE_BYPASS_DRIVE);
+	}
+  	break;
+	}
+	case STATE_REORIENT:
   {
-    unsigned long timeInState = currentTime - stateStartTime;
+    unsigned long timeInState = Current_Time - State_Start_Time;
 
     // briefly pause so encoders reset
-  if (timeInState < 200) {
-    StopDriving();
-    previousLeftEncoderCount  = leftEncoderCount;
-    previousRightEncoderCount = rightEncoderCount;
+  if (timeInState < 200)
+  {
+    Stop_Motors();
+    Previous_Left_Encoder_Count  = Left_Encoder_Count;
+    Previous_Right_Encoder_Count = Right_Encoder_Count;
     break;
   }
 
 
-  if (obstacle_detected() && timeInState > REORIENT_OBSTACLE_SUPPRESS_MS) {
-    StopDriving();
+  if (Obstacle_Detected() && timeInState > REORIENT_OBSTACLE_SUPPRESS_MS)
+  {
+    Stop_Motors();
     Changestate(STATE_AVOID_OBSTACLE);
     break;
-}
-  DrivingLEDs ();
+  }
+  Driving_LEDs ();
 
   float targetAngle = angle_to_target ();
-  float angleDiff = targetAngle - headingDeg;
+  float Angle_Diff = targetAngle - Heading_Deg;
 
   // normalise the angles to -180 and +180 degrees values
-  while (angleDiff < -180) angleDiff += 360;
-  while (angleDiff > 180) angleDiff -= 360;
+  while (Angle_Diff < -180) Angle_Diff += 360;
+  while (Angle_Diff > 180) Angle_Diff -= 360;
 
   //checks if the robot is within an acceptable degree dispacement from the target.
-  if (abs(angleDiff) < 5) {
-    StopDriving ();
+  if (abs(Angle_Diff) < 5) {
+    Stop_Motors ();
     Changestate (STATE_MOVE_FORWARD);
   }
-  else if (angleDiff > 0) {
-  TurnRight();
-  UpdateHeadingFromEncoders(+1);
+  else if (Angle_Diff > 0) {
+  Turn_Right();
+  Update_Heading(+1);
 }
 else {
-  TurnLeft();
-  UpdateHeadingFromEncoders(-1);
+  Turn_Left();
+  Update_Heading(-1);
 }
   }
   break;
 
   case STATE_AVOID_OBSTACLE:
-  StopDriving();
+  Stop_Motors();
 
-  if ((currentTime / FLASH_INTERVAL_MS) % 2 == 0) RedLED();
-  else DisableBothLEDs();
+  if ((Current_Time / FLASH_INTERVAL_MS) % 2 == 0) Set_Red_LED();
+  else Disable_Both_LEDs();
 
-  if (currentTime - stateStartTime >= FLASH_INTERVAL_MS * 4) {
-    lockedTurnDirection = direction_of_turning();
-    avoidTargetHeading = headingDeg + (lockedTurnDirection * 90.0);
-    while (avoidTargetHeading < -180) avoidTargetHeading += 360;
-    while (avoidTargetHeading >  180) avoidTargetHeading -= 360;
+  if (Current_Time - State_Start_Time >= FLASH_INTERVAL_MS * 4) {
+    lockedTurnDirection = Direction_of_Turning();
+    Avoid_Target_Heading = Heading_Deg + (lockedTurnDirection * 90.0);
+    while (Avoid_Target_Heading < -180) Avoid_Target_Heading += 360;
+    while (Avoid_Target_Heading >  180) Avoid_Target_Heading -= 360;
     if (lockedTurnDirection < 0) Changestate(STATE_TURN_LEFT);
     else                         Changestate(STATE_TURN_RIGHT);
   }
@@ -715,32 +684,32 @@ else {
 
   case STATE_BYPASS_DRIVE:
 {
-  DrivingLEDs();
+  Driving_LEDs();
 
-  unsigned long timeInState = currentTime - stateStartTime;
+  unsigned long timeInState = Current_Time - State_Start_Time;
   const unsigned long MIN_BYPASS_MS =670;
 
   if (timeInState < MIN_BYPASS_MS) {
-    DriveForwards();
+    Drive_Forwards();
   }
-  else if (!obstacle_detected()) {
-    StopDriving ();
+  else if (!Obstacle_Detected()) {
+    Stop_Motors ();
     Changestate (STATE_REORIENT);
   }
   else {
     // obstacle is not detected any longer
-    DriveForwards ();
+    Drive_Forwards ();
   }
   break;
 }
 
     case STATE_COMPLETED:
     
-    	StopDriving ();
+    	Stop_Motors ();
      
-     	EnableBothLEDs ();
+     	Enable_Both_LEDs ();
      
-     	SetLEDColour (0, 0, BRIGHT_PWM);
+     	Set_LED_Colour (0, 0, BRIGHT_PWM);
     
     	break;
   }
